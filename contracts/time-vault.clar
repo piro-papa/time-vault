@@ -186,3 +186,98 @@
     ;; Input validation
     (asserts! (validate-tier-id tier-id) ERR_INVALID_TIER_CONFIG)
     (asserts! (validate-session-duration block-count) ERR_INVALID_TIME_DURATION)
+
+    (match (map-get? access-tiers { tier-id: tier-id })
+      tier-config (if (and
+          (>= block-count (get min-session-blocks tier-config))
+          (<= block-count (get max-session-blocks tier-config))
+          (get tier-active tier-config)
+        )
+        ;; Secure arithmetic to prevent overflow
+        (secure-multiply (get block-rate tier-config) block-count)
+        ERR_INVALID_TIME_DURATION
+      )
+      ERR_INVALID_TIER_CONFIG
+    )
+  )
+)
+
+(define-read-only (get-contract-owner)
+  (var-get contract-owner)
+)
+
+(define-read-only (get-highest-tier-id)
+  (var-get highest-tier-id)
+)
+
+;; PUBLIC PLAYER FUNCTIONS
+
+(define-public (initialize-session
+    (tier-id uint)
+    (session-blocks uint)
+    (auto-renewal bool)
+  )
+  (let (
+      (user tx-sender)
+      (current-block stacks-block-height)
+      (new-user-id (var-get next-user-id))
+    )
+    ;; Comprehensive input validation
+    (asserts! (validate-tier-id tier-id) ERR_INVALID_TIER_CONFIG)
+    (asserts! (validate-session-duration session-blocks)
+      ERR_INVALID_TIME_DURATION
+    )
+
+    ;; Prevent duplicate active sessions
+    (asserts! (not (verify-active-session user)) ERR_ACTIVE_SESSION_EXISTS)
+
+    ;; Calculate and validate session cost
+    (match (compute-session-cost tier-id session-blocks)
+      session-cost (let (
+        )
+        ;; Secure block arithmetic
+        (match (secure-addition current-block session-blocks)
+          session-end-block (begin
+            ;; Create comprehensive user session record
+            (map-set user-sessions { user: user } {
+              user-id: new-user-id,
+              current-tier: tier-id,
+              session-start: current-block,
+              session-end: session-end-block,
+              renewal-enabled: auto-renewal,
+              lifetime-expenditure: session-cost,
+            })
+
+            ;; Maintain session registry for administrative oversight
+            (map-set session-registry { user-id: new-user-id } {
+              user-principal: user,
+              tier-assignment: tier-id,
+              activation-block: current-block,
+              expiration-block: session-end-block,
+              auto-renewal: auto-renewal,
+              total-investment: session-cost,
+              session-status: true,
+            })
+
+            ;; Atomically increment user counter
+            (var-set next-user-id (+ new-user-id u1))
+
+            ;; Execute payment transfer
+            (try! (stx-transfer? session-cost user (var-get contract-owner)))
+
+            (ok new-user-id)
+          )
+          arithmetic-error (err arithmetic-error)
+        )
+      )
+      cost-error (err cost-error)
+    )
+  )
+)
+
+(define-public (extend-session-duration (additional-blocks uint))
+  (let ((user tx-sender))
+    ;; Validate extension request
+    (asserts! (validate-session-duration additional-blocks)
+      ERR_INVALID_TIME_DURATION
+    )
