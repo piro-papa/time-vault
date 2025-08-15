@@ -90,3 +90,99 @@
   max-session-blocks: u52560,
   tier-active: true,
 })
+
+;; VALIDATION UTILITIES
+
+(define-private (validate-tier-id (tier-id uint))
+  (and (> tier-id u0) (<= tier-id MAX_TIER_LIMIT))
+)
+
+(define-private (validate-block-cost (cost uint))
+  (and (>= cost MIN_BLOCK_COST) (<= cost MAX_BLOCK_COST))
+)
+
+(define-private (validate-session-duration (duration uint))
+  (and (> duration u0) (<= duration MAX_SESSION_LENGTH))
+)
+
+(define-private (validate-duration-boundaries
+    (min-duration uint)
+    (max-duration uint)
+  )
+  (and
+    (validate-session-duration min-duration)
+    (validate-session-duration max-duration)
+    (<= min-duration max-duration)
+  )
+)
+
+(define-private (secure-multiply
+    (operand-a uint)
+    (operand-b uint)
+  )
+  (let ((product (* operand-a operand-b)))
+    (if (and (> operand-a u0) (> operand-b u0))
+      ;; Overflow detection: if a * b / a != b, overflow occurred
+      (if (is-eq (/ product operand-a) operand-b)
+        (ok product)
+        ERR_ARITHMETIC_OVERFLOW
+      )
+      (ok product)
+    )
+  )
+)
+
+(define-private (secure-addition
+    (addend-a uint)
+    (addend-b uint)
+  )
+  (let ((sum (+ addend-a addend-b)))
+    (if (>= sum addend-a)
+      (ok sum)
+      ERR_ARITHMETIC_OVERFLOW
+    )
+  )
+)
+
+;; READ-ONLY FUNCTIONS
+
+(define-read-only (fetch-tier-details (tier-id uint))
+  (if (validate-tier-id tier-id)
+    (map-get? access-tiers { tier-id: tier-id })
+    none
+  )
+)
+
+(define-read-only (fetch-user-session (user principal))
+  (map-get? user-sessions { user: user })
+)
+
+(define-read-only (fetch-session-by-id (user-id uint))
+  (map-get? session-registry { user-id: user-id })
+)
+
+(define-read-only (verify-active-session (user principal))
+  (match (map-get? user-sessions { user: user })
+    session-data (>= (get session-end session-data) stacks-block-height)
+    false
+  )
+)
+
+(define-read-only (calculate-remaining-blocks (user principal))
+  (match (map-get? user-sessions { user: user })
+    session-data (if (>= (get session-end session-data) stacks-block-height)
+      (some (- (get session-end session-data) stacks-block-height))
+      (some u0)
+    )
+    none
+  )
+)
+
+(define-read-only (compute-session-cost
+    (tier-id uint)
+    (block-count uint)
+  )
+  (begin
+    ;; Input validation
+    (asserts! (validate-tier-id tier-id) ERR_INVALID_TIER_CONFIG)
+    (asserts! (validate-session-duration block-count) ERR_INVALID_TIME_DURATION)
