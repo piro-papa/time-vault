@@ -281,3 +281,102 @@
     (asserts! (validate-session-duration additional-blocks)
       ERR_INVALID_TIME_DURATION
     )
+
+    (match (map-get? user-sessions { user: user })
+      session-data (let (
+          (current-tier (get current-tier session-data))
+          (current-expiration (get session-end session-data))
+        )
+        ;; Calculate extension cost with current tier rates
+        (match (compute-session-cost current-tier additional-blocks)
+          extension-cost (begin
+            ;; Secure arithmetic for new expiration and total cost
+            (match (secure-addition current-expiration additional-blocks)
+              new-expiration (match (secure-addition (get lifetime-expenditure session-data)
+                extension-cost
+              )
+                updated-total (begin
+                  ;; Update user session with extension
+                  (map-set user-sessions { user: user }
+                    (merge session-data {
+                      session-end: new-expiration,
+                      lifetime-expenditure: updated-total,
+                    })
+                  )
+
+                  ;; Synchronize session registry
+                  (map-set session-registry { user-id: (get user-id session-data) }
+                    (merge
+                      (unwrap-panic (map-get? session-registry { user-id: (get user-id session-data) })) {
+                      expiration-block: new-expiration,
+                      total-investment: updated-total,
+                    })
+                  )
+
+                  ;; Process extension payment
+                  (try! (stx-transfer? extension-cost user (var-get contract-owner)))
+
+                  (ok new-expiration)
+                )
+                arithmetic-error (err arithmetic-error)
+              )
+              arithmetic-error (err arithmetic-error)
+            )
+          )
+          cost-error (err cost-error)
+        )
+      )
+      ERR_NO_ACTIVE_SESSION
+    )
+  )
+)
+
+(define-public (terminate-session)
+  (let ((user tx-sender))
+    (match (map-get? user-sessions { user: user })
+      session-data (begin
+        ;; Deactivate session in registry
+        (map-set session-registry { user-id: (get user-id session-data) }
+          (merge
+            (unwrap-panic (map-get? session-registry { user-id: (get user-id session-data) })) {
+            session-status: false,
+            auto-renewal: false,
+          })
+        )
+
+        ;; Immediately terminate user session
+        (map-set user-sessions { user: user }
+          (merge session-data {
+            renewal-enabled: false,
+            session-end: stacks-block-height, ;; Immediate termination
+          })
+        )
+
+        (ok true)
+      )
+      ERR_NO_ACTIVE_SESSION
+    )
+  )
+)
+
+(define-public (toggle-renewal-setting)
+  (let ((user tx-sender))
+    (match (map-get? user-sessions { user: user })
+      session-data (let ((updated-renewal (not (get renewal-enabled session-data))))
+        ;; Update user session renewal preference
+        (map-set user-sessions { user: user }
+          (merge session-data { renewal-enabled: updated-renewal })
+        )
+
+        ;; Synchronize registry with preference change
+        (map-set session-registry { user-id: (get user-id session-data) }
+          (merge
+            (unwrap-panic (map-get? session-registry { user-id: (get user-id session-data) })) { auto-renewal: updated-renewal }
+          ))
+
+        (ok updated-renewal)
+      )
+      ERR_NO_ACTIVE_SESSION
+    )
+  )
+)
