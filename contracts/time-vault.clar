@@ -380,3 +380,86 @@
     )
   )
 )
+
+;; ADMINISTRATIVE FUNCTIONS
+
+(define-public (deploy-new-tier
+    (tier-name (string-ascii 64))
+    (block-rate uint)
+    (min-blocks uint)
+    (max-blocks uint)
+  )
+  (let ((new-tier-id (+ (var-get highest-tier-id) u1)))
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR_UNAUTHORIZED)
+
+    ;; Comprehensive input validation
+    (asserts! (> (len tier-name) u0) ERR_MALFORMED_INPUT)
+    (asserts! (validate-block-cost block-rate) ERR_MALFORMED_INPUT)
+    (asserts! (validate-duration-boundaries min-blocks max-blocks)
+      ERR_MALFORMED_INPUT
+    )
+    (asserts! (<= new-tier-id MAX_TIER_LIMIT) ERR_INVALID_TIER_CONFIG)
+
+    ;; Deploy new tier with validated configuration
+    (map-set access-tiers { tier-id: new-tier-id } {
+      tier-name: tier-name,
+      block-rate: block-rate,
+      min-session-blocks: min-blocks,
+      max-session-blocks: max-blocks,
+      tier-active: true,
+    })
+
+    ;; Update tier counter
+    (var-set highest-tier-id new-tier-id)
+
+    (ok new-tier-id)
+  )
+)
+
+(define-public (modify-tier-configuration
+    (tier-id uint)
+    (tier-name (string-ascii 64))
+    (block-rate uint)
+    (min-blocks uint)
+    (max-blocks uint)
+    (active-status bool)
+  )
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR_UNAUTHORIZED)
+
+    ;; Comprehensive validation suite
+    (asserts! (validate-tier-id tier-id) ERR_INVALID_TIER_CONFIG)
+    (asserts! (is-some (map-get? access-tiers { tier-id: tier-id }))
+      ERR_INVALID_TIER_CONFIG
+    )
+    (asserts! (> (len tier-name) u0) ERR_MALFORMED_INPUT)
+    (asserts! (validate-block-cost block-rate) ERR_MALFORMED_INPUT)
+    (asserts! (validate-duration-boundaries min-blocks max-blocks)
+      ERR_MALFORMED_INPUT
+    )
+
+    ;; Apply configuration changes
+    (map-set access-tiers { tier-id: tier-id } {
+      tier-name: tier-name,
+      block-rate: block-rate,
+      min-session-blocks: min-blocks,
+      max-session-blocks: max-blocks,
+      tier-active: active-status,
+    })
+
+    (ok true)
+  )
+)
+
+(define-public (transfer-ownership (new-owner principal))
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) ERR_UNAUTHORIZED)
+    ;; Prevent self-transfer
+    (asserts! (not (is-eq new-owner (var-get contract-owner)))
+      ERR_MALFORMED_INPUT
+    )
+    ;; Execute ownership transfer
+    (var-set contract-owner new-owner)
+    (ok true)
+  )
+)
